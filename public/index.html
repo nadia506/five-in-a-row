@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Five in a Row</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <!-- Start Screen -->
+      <div id="startScreen" class="start-screen">
+        <h1>Five in a Row</h1>
+        <p>Select a game mode to start</p>
+        <div class="mode-buttons">
+          <button id="localBtn" class="mode-btn">🎮 Single-Player</button>
+          <button id="onlineBtn" class="mode-btn">🌐 Multi-Player</button>
+        </div>
+        <div id="onlineSetup" class="online-setup" style="display: none">
+          <input id="room" placeholder="Enter room ID" />
+          <button id="join" class="join-btn">Join Room</button>
+        </div>
+      </div>
+
+      <!-- Game Screen -->
+      <div id="gameScreen" class="game-screen" style="display: none">
+        <div class="topbar">
+          <div id="status" aria-live="polite">Waiting to start...</div>
+          <div class="button-group">
+            <button id="backBtn" class="back-btn">← Back</button>
+            <button id="restart" class="restart-btn" disabled>Restart</button>
+          </div>
+        </div>
+        <canvas
+          id="board"
+          width="640"
+          height="640"
+          role="img"
+          aria-label="Gomoku Board"
+        ></canvas>
+        <p class="hint">
+          Click to place stones. Black plays first. First to connect five wins.
+        </p>
+      </div>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
