@@ -1,14 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap");
-
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: "Nunito", system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
-    Arial, sans-serif;
-  background: #fdf7e4;
+  background: #f9f1db;
   color: #444;
   display: flex;
   justify-content: center;
@@ -33,25 +29,21 @@ body {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.1);
   animation: fadeInScale 0.4s ease-in-out;
 }
-
 .start-screen h1 {
   margin: 0;
   font-size: 32px;
-  color: #ff7b54;
+  color: rgb(129, 129, 241);
   font-weight: 700;
 }
-
 .start-screen p {
   margin: 4px 0 16px;
   color: #666;
   font-size: 15px;
 }
-
 .mode-buttons {
   display: flex;
   gap: 14px;
 }
-
 .mode-btn {
   padding: 14px 24px;
   font-size: 16px;
@@ -64,26 +56,27 @@ body {
   color: white;
   box-shadow: 0 5px 12px rgba(0, 0, 0, 0.12);
 }
-
 .mode-btn:hover {
   transform: scale(1.08);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
 }
-
 .mode-btn:nth-child(2) {
   background: #6eb5ff;
 }
 
-.mode-btn:nth-child(3) {
-  background: #ffb84d;
+.mp-choices {
+  display: none;
+  gap: 14px;
+  margin-top: 10px;
+  justify-content: center;
 }
 
 .online-setup {
-  display: flex;
+  display: none;
   gap: 10px;
   margin-top: 12px;
+  justify-content: center;
 }
-
 .online-setup input {
   padding: 10px 12px;
   border: 2px solid #ffd18c;
@@ -91,11 +84,9 @@ body {
   font-size: 14px;
   outline: none;
 }
-
 .online-setup input:focus {
   border-color: #ff9e6f;
 }
-
 .join-btn {
   background: #ff9e6f;
   color: white;
@@ -105,7 +96,6 @@ body {
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.2s;
 }
-
 .join-btn:hover {
   transform: scale(1.07);
   box-shadow: 0 5px 12px rgba(0, 0, 0, 0.12);
@@ -118,7 +108,6 @@ body {
   align-items: center;
   animation: fadeInScale 0.4s ease-in-out;
 }
-
 .topbar,
 #board,
 .hint {
@@ -126,20 +115,16 @@ body {
   max-width: 640px;
   margin: 0 auto;
 }
-
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  padding-top: 6px;
   padding-bottom: 4px;
 }
-
 #status {
   font-weight: 700;
   color: #444;
 }
-
 .button-group {
   display: flex;
   gap: 10px;
@@ -147,35 +132,27 @@ body {
   margin-top: -2px;
 }
 
-.back-btn {
+.back-btn,
+.restart-btn {
   padding: 7px 12px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s;
+}
+.back-btn {
   background: #ffd66b;
   color: #333;
   font-weight: 600;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.2s;
 }
-
-.back-btn:hover {
-  transform: scale(1.07);
-  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.15);
-}
-
-.restart-btn {
-  padding: 7px 12px;
-  background: #ff7675;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.2s;
-}
-
+.back-btn:hover,
 .restart-btn:hover {
   transform: scale(1.07);
   box-shadow: 0 5px 12px rgba(0, 0, 0, 0.15);
+}
+.restart-btn {
+  background: #ff7675;
+  color: white;
 }
 
 #board {
@@ -189,7 +166,6 @@ body {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
   transition: transform 0.3s ease;
 }
-
 #board:hover {
   transform: scale(1.01);
 }

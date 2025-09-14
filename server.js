@@ -2,6 +2,7 @@ import express from "express";
 import http from "http";
 import cors from "cors";
 import { WebSocketServer } from "ws";
+import crypto from "crypto";
 
 const app = express();
 app.use(cors());
@@ -14,6 +15,42 @@ const GRID = 19;
 function emptyBoard() {
   return Array.from({ length: GRID }, () => Array(GRID).fill(0));
 }
+const ROOM_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function genRoomId(len = 6) {
+  let s = "";
+  for (let i = 0; i < len; i++)
+    s += ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)];
+  return s;
+}
+function seatsFilled(room) {
+  return !!(room.players.black && room.players.white);
+}
+
+app.post("/rooms", (req, res) => {
+  let roomId = genRoomId();
+  let tries = 0;
+  while (rooms.has(roomId) && tries < 5) {
+    roomId = genRoomId();
+    tries++;
+  }
+  if (rooms.has(roomId))
+    return res.status(500).json({ error: "could not create room" });
+
+  const room = {
+    board: emptyBoard(),
+    current: 1,
+    gameOver: false,
+    winLine: null,
+    lastWinner: null,
+    players: { black: null, white: null },
+    sockets: new Set(),
+    createdAt: Date.now(),
+    cleanupTimer: null,
+    seatTimers: { black: null, white: null },
+  };
+  rooms.set(roomId, room);
+  return res.json({ room: roomId });
+});
 
 app.get("/token", (req, res) => {
   const roomId = String(req.query.room || "").trim();
@@ -26,11 +63,17 @@ app.get("/token", (req, res) => {
       current: 1,
       gameOver: false,
       winLine: null,
+      lastWinner: null,
       players: { black: null, white: null },
       sockets: new Set(),
       createdAt: Date.now(),
+      cleanupTimer: null,
+      seatTimers: { black: null, white: null }, // ✅ 여기에도 포함
     };
     rooms.set(roomId, room);
+  } else if (room.cleanupTimer) {
+    clearTimeout(room.cleanupTimer);
+    room.cleanupTimer = null;
   }
 
   let color = null;
@@ -38,12 +81,12 @@ app.get("/token", (req, res) => {
   else if (!room.players.white) color = 2;
   else return res.status(409).json({ error: "room full" });
 
-  const token = `${roomId}.${color}.${Math.random().toString(36).slice(2)}`;
+  const token = `${roomId}.${color}.${crypto.randomUUID()}`;
   const playerId = token.split(".").slice(-1)[0];
   if (color === 1) room.players.black = { id: playerId, token };
   else room.players.white = { id: playerId, token };
 
-  res.json({ room: roomId, token, color });
+  return res.json({ room: roomId, token, color });
 });
 
 const server = http.createServer(app);
@@ -67,23 +110,35 @@ wss.on("connection", (ws) => {
       if (!parsed)
         return ws.send(json({ type: "error", message: "invalid token" }));
       const { roomId, color } = parsed;
+
       const room = rooms.get(roomId);
       if (!room)
         return ws.send(json({ type: "error", message: "room not found" }));
 
-      const expect = color === 1 ? room.players.black : room.players.white;
-      if (!expect || expect.token !== token) {
+      const expected = color === 1 ? room.players.black : room.players.white;
+      if (!expected || expected.token !== token) {
         return ws.send(json({ type: "error", message: "auth failed" }));
       }
 
       ws.meta = { roomId, color };
       room.sockets.add(ws);
 
+      const seatKey = color === 1 ? "black" : "white";
+      if (room.seatTimers?.[seatKey]) {
+        clearTimeout(room.seatTimers[seatKey]);
+        room.seatTimers[seatKey] = null;
+      }
+
       sendStateTo(ws, room, color);
       broadcastExcept(ws, room, {
-        type: "info",
-        message: color === 1 ? "Black joined" : "White joined",
+        type: "state",
+        board: room.board,
+        current: room.current,
+        gameOver: room.gameOver,
+        winLine: room.winLine,
+        ready: seatsFilled(room),
       });
+
       return;
     }
 
@@ -92,12 +147,13 @@ wss.on("connection", (ws) => {
       const { roomId, color } = ws.meta;
       const room = rooms.get(roomId);
       if (!room) return;
-      const { r, c } = msg;
 
+      const { r, c } = msg;
       if (room.gameOver) return sendError(ws, "game already over");
       if (!inRange(r, c)) return sendError(ws, "out of range");
       if (room.board[r][c] !== 0) return sendError(ws, "occupied");
       if (color !== room.current) return sendError(ws, "not your turn");
+      if (!seatsFilled(room)) return sendError(ws, "waiting for opponent");
 
       room.board[r][c] = color;
 
@@ -105,7 +161,8 @@ wss.on("connection", (ws) => {
       if (win.win) {
         room.gameOver = true;
         room.winLine = win.line;
-        broadcast(room, {
+        room.lastWinner = color;
+        return broadcast(room, {
           type: "state",
           board: room.board,
           lastMove: { r, c, color },
@@ -113,19 +170,19 @@ wss.on("connection", (ws) => {
           gameOver: true,
           winner: color,
           winLine: room.winLine,
+          ready: seatsFilled(room),
         });
-        return;
       }
 
       room.current = room.current === 1 ? 2 : 1;
-      broadcast(room, {
+      return broadcast(room, {
         type: "state",
         board: room.board,
         lastMove: { r, c, color },
         current: room.current,
         gameOver: false,
+        ready: seatsFilled(room),
       });
-      return;
     }
 
     if (msg.type === "restart") {
@@ -133,25 +190,47 @@ wss.on("connection", (ws) => {
       const { roomId } = ws.meta;
       const room = rooms.get(roomId);
       if (!room) return;
+
       room.board = emptyBoard();
-      room.current = 1; // 새 게임은 Black 선공
+      room.current = room.lastWinner === 2 ? 2 : 1;
       room.gameOver = false;
       room.winLine = null;
-      broadcast(room, {
+
+      return broadcast(room, {
         type: "state",
         board: room.board,
         current: room.current,
         gameOver: false,
+        winLine: null,
+        ready: seatsFilled(room),
       });
-      return;
     }
   });
 
   ws.on("close", () => {
     if (!ws.meta) return;
-    const room = rooms.get(ws.meta.roomId);
+    const { roomId, color } = ws.meta;
+    const room = rooms.get(roomId);
     if (!room) return;
+
     room.sockets.delete(ws);
+    const seatKey = color === 1 ? "black" : "white";
+    if (room.seatTimers?.[seatKey]) clearTimeout(room.seatTimers[seatKey]);
+    room.seatTimers[seatKey] = setTimeout(() => {
+      const stillHere = [...room.sockets].some(
+        (s) => s.meta?.roomId === roomId && s.meta?.color === color
+      );
+      if (!stillHere) room.players[seatKey] = null;
+      room.seatTimers[seatKey] = null;
+    }, 90 * 1000);
+
+    if (room.sockets.size === 0) {
+      if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
+      room.cleanupTimer = setTimeout(
+        () => rooms.delete(roomId),
+        10 * 60 * 1000
+      );
+    }
   });
 });
 
@@ -164,9 +243,7 @@ setInterval(() => {
 }, 30000);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server at http://localhost:${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server at http://localhost:${PORT}`));
 
 function parseToken(token) {
   if (!token) return null;
@@ -207,13 +284,13 @@ function sendStateTo(ws, room, yourColor) {
       gameOver: room.gameOver,
       winLine: room.winLine,
       youAre: yourColor,
+      ready: seatsFilled(room),
     })
   );
 }
 function inRange(r, c) {
   return r >= 0 && r < GRID && c >= 0 && c < GRID;
 }
-
 function computeWin(bd, r, c) {
   const color = bd[r][c];
   const dirs = [

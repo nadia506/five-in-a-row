@@ -9,6 +9,9 @@
   const gameScreen = document.getElementById("gameScreen");
   const localBtn = document.getElementById("localBtn");
   const onlineBtn = document.getElementById("onlineBtn");
+  const mpChoices = document.getElementById("mpChoices");
+  const createBtn = document.getElementById("createBtn");
+  const showJoinBtn = document.getElementById("showJoinBtn");
   const onlineSetup = document.getElementById("onlineSetup");
   const joinBtn = document.getElementById("join");
   const roomInput = document.getElementById("room");
@@ -16,11 +19,11 @@
   const canvas = document.getElementById("board");
   const statusEl = document.getElementById("status");
   const restartBtn = document.getElementById("restart");
+  const backBtn = document.getElementById("backBtn");
+  const roomBadge = document.getElementById("roomBadge");
   const ctx = canvas.getContext("2d");
 
   let mode = null;
-
-  // Local state
   const L = {
     board: makeBoard(),
     current: 1,
@@ -28,8 +31,6 @@
     winLine: null,
     nextFirst: 1,
   };
-
-  // Online state
   const O = {
     board: makeBoard(),
     current: 1,
@@ -38,8 +39,24 @@
     youAre: 0,
     token: null,
     ws: null,
+    room: null,
   };
 
+  function apiBase() {
+    if (location.protocol === "file:") return "http://localhost:3000";
+    return ""; // same-origin
+  }
+  function wsBase() {
+    if (location.protocol === "file:") return "ws://localhost:3000";
+    return (
+      (location.protocol === "https:" ? "wss://" : "ws://") + location.host
+    );
+  }
+
+  function setBoardInteractivity(on) {
+    canvas.style.pointerEvents = on ? "auto" : "none";
+    canvas.style.cursor = on ? "pointer" : "not-allowed";
+  }
   let DPR = getDPR();
   function getDPR() {
     return Math.max(1, Math.floor((window.devicePixelRatio || 1) * 100) / 100);
@@ -48,8 +65,7 @@
     const rect = canvas.getBoundingClientRect();
     DPR = getDPR();
     let cssW = rect.width || canvas.clientWidth || 640;
-    let cssH = rect.height || canvas.clientHeight || 0;
-
+    let cssH = rect.height || 0;
     if (!cssH || cssH < 2) {
       cssH = cssW;
       canvas.style.height = cssH + "px";
@@ -92,7 +108,6 @@
     ctx.save();
     ctx.lineWidth = 1 / DPR;
     ctx.strokeStyle = "#333333A0";
-
     for (let i = 0; i < GRID; i++) {
       const x = align(start + i * step);
       ctx.beginPath();
@@ -100,7 +115,6 @@
       ctx.lineTo(x, align(end));
       ctx.stroke();
     }
-
     for (let i = 0; i < GRID; i++) {
       const y = align(start + i * step);
       ctx.beginPath();
@@ -108,7 +122,6 @@
       ctx.lineTo(align(end), y);
       ctx.stroke();
     }
-
     const starIdx = [3, 9, 15];
     ctx.fillStyle = "#222";
     for (const r of starIdx)
@@ -140,23 +153,20 @@
     ctx.restore();
   }
 
-  function highlightWinLine(lineCells) {
-    if (!lineCells) return;
+  function highlightWinLine(line) {
+    if (!line) return;
     ctx.save();
     ctx.lineWidth = Math.max(2, 3 / DPR);
     ctx.strokeStyle = "#c89d00";
-    for (const { r, c } of lineCells) {
+    for (const { r, c } of line) {
       const { x, y } = cellCenter(r, c);
       ctx.beginPath();
       ctx.arc(x, y, STONE_RADIUS - 3, 0, Math.PI * 2);
       ctx.stroke();
     }
-    if (lineCells.length >= 2) {
-      const a = cellCenter(lineCells[0].r, lineCells[0].c);
-      const b = cellCenter(
-        lineCells[lineCells.length - 1].r,
-        lineCells[lineCells.length - 1].c
-      );
+    if (line.length >= 2) {
+      const a = cellCenter(line[0].r, line[0].c);
+      const b = cellCenter(line[line.length - 1].r, line[line.length - 1].c);
       ctx.lineWidth = Math.max(4, 6 / DPR);
       ctx.strokeStyle = "#c89d00AA";
       ctx.beginPath();
@@ -204,28 +214,6 @@
       if (O.gameOver && O.winLine) drawDimOverlay();
     }
   }
-
-  const backBtn = document.getElementById("backBtn");
-
-  backBtn.addEventListener("click", () => {
-    gameScreen.style.display = "none";
-    startScreen.style.display = "flex";
-
-    mode = null;
-    setStatus("Waiting to start...");
-    restartBtn.disabled = true;
-
-    L.board = makeBoard();
-    O.board = makeBoard();
-    L.gameOver = O.gameOver = false;
-    L.winLine = O.winLine = null;
-    drawAll();
-
-    if (O.ws && O.ws.readyState === WebSocket.OPEN) {
-      O.ws.close();
-      O.ws = null;
-    }
-  });
 
   function localReset(first) {
     L.board = makeBoard();
@@ -295,15 +283,27 @@
     }
 
     L.current = L.current === 1 ? 2 : 1;
-    setStatus(`Local • ${L.current === 1 ? "Black's Turn" : "White's Turn"}`);
+    setStatus(`${L.current === 1 ? "Black's Turn" : "White's Turn"}`);
     drawAll();
   }
-
   async function requestToken(roomId) {
-    const res = await fetch(`/token?room=${encodeURIComponent(roomId)}`);
+    const res = await fetch(
+      `${apiBase()}/token?room=${encodeURIComponent(roomId)}`
+    );
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Token request failed");
-    return data;
+    return data; // { room, token, color }
+  }
+
+  async function createRoomOnServer() {
+    try {
+      const resp = await fetch(`${apiBase()}/rooms`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "create room failed");
+      return data.room;
+    } catch {
+      return genRoomId();
+    }
   }
 
   function connectWS() {
@@ -311,25 +311,25 @@
       try {
         O.ws.close();
       } catch {}
-    const url =
-      (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+    const url = wsBase();
     O.ws = new WebSocket(url);
 
     O.ws.addEventListener("open", () => {
       O.ws.send(JSON.stringify({ type: "hello", token: O.token }));
-      setStatus(`Online • You are ${O.youAre === 1 ? "Black" : "White"}`);
+      setStatus(`You are ${O.youAre === 1 ? "Black" : "White"}`);
       restartBtn.disabled = false;
+      setBoardInteractivity(false);
     });
 
     O.ws.addEventListener("message", (ev) => {
       const msg = JSON.parse(ev.data);
+
       if (msg.type === "error") {
-        setStatus(`Online • Server error: ${msg.message}`);
+        setStatus(`Server error: ${msg.message}`);
         return;
       }
       if (msg.type === "info") {
-        setStatus(`Online • ${msg.message}`);
-        return;
+        setStatus(`${msg.message}`);
       }
       if (msg.type === "state") {
         O.board = msg.board || O.board;
@@ -337,26 +337,197 @@
         O.gameOver = !!msg.gameOver;
         O.winLine = msg.winLine || null;
 
+        const ready = !!msg.ready;
+        const yourTurn = ready && !O.gameOver && O.youAre === O.current;
+        setBoardInteractivity(yourTurn);
+
+        if (!ready) {
+          setStatus("Waiting for opponent…");
+          drawAll();
+          return;
+        }
+
         if (O.gameOver && msg.winner) {
           drawAll();
           const winText = msg.winner === 1 ? "Black Wins!" : "White Wins!";
-          setStatus(`Online • ${winText}`);
+          setStatus(`${winText}`);
           showWinOverlay(winText);
         } else {
           const turnTxt = O.current === 1 ? "Black's Turn" : "White's Turn";
           const youTxt = O.youAre === 1 ? "You are Black" : "You are White";
-          setStatus(`Online • ${turnTxt} • ${youTxt}`);
+          setStatus(`${turnTxt} • ${youTxt}`);
           drawAll();
         }
       }
     });
 
-    O.ws.addEventListener("close", () => setStatus("Online • Disconnected"));
+    O.ws.addEventListener("close", () => {
+      setStatus("Disconnected");
+      setBoardInteractivity(false);
+    });
   }
+
+  function nextFrame() {
+    return new Promise((r) => requestAnimationFrame(() => r()));
+  }
+  function genRoomId(len = 6) {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let s = "";
+    for (let i = 0; i < len; i++)
+      s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  }
+
+  localBtn.addEventListener("click", async () => {
+    mode = "local";
+    mpChoices.style.display = "none";
+    onlineSetup.style.display = "none";
+    if (roomBadge) roomBadge.style.display = "none";
+
+    startScreen.style.display = "none";
+    gameScreen.style.display = "block";
+    await nextFrame();
+    setupHiDPI();
+    drawAll();
+    restartBtn.disabled = false;
+    setStatus("Black's Turn");
+    localReset(1);
+    setBoardInteractivity(true);
+  });
+
+  onlineBtn.addEventListener("click", () => {
+    mpChoices.style.display = "flex";
+    onlineSetup.style.display = "none";
+  });
+
+  showJoinBtn.addEventListener("click", () => {
+    mpChoices.style.display = "none";
+    onlineSetup.style.display = "flex";
+    roomInput.focus();
+  });
+
+  createBtn.addEventListener("click", async () => {
+    mpChoices.style.display = "none";
+    try {
+      setStatus("Creating room...");
+      const code = await createRoomOnServer();
+      const data = await requestToken(code);
+      O.token = data.token;
+      O.youAre = data.color;
+      O.room = code;
+      sessionStorage.setItem(
+        "gomoku_session",
+        JSON.stringify({ room: O.room, token: O.token, color: O.youAre })
+      );
+
+      mode = "online";
+      startScreen.style.display = "none";
+      gameScreen.style.display = "block";
+      await nextFrame();
+      setupHiDPI();
+      drawAll();
+      setBoardInteractivity(false);
+      setStatus("Waiting for opponent…");
+
+      if (roomBadge) {
+        roomBadge.style.display = "inline-block";
+        roomBadge.textContent = `Room: ${code}`;
+      }
+
+      connectWS();
+    } catch (e) {
+      setStatus(`${e.message}`);
+    }
+  });
+
+  joinBtn.addEventListener("click", async () => {
+    const room = (roomInput.value || "").trim();
+    if (!room) {
+      setStatus("Please enter a room ID");
+      return;
+    }
+    try {
+      setStatus("Requesting token...");
+      const data = await requestToken(room);
+      O.token = data.token;
+      O.youAre = data.color;
+      O.room = room;
+      sessionStorage.setItem(
+        "gomoku_session",
+        JSON.stringify({ room: O.room, token: O.token, color: O.youAre })
+      );
+
+      mode = "online";
+      startScreen.style.display = "none";
+      gameScreen.style.display = "block";
+      await nextFrame();
+      setupHiDPI();
+      drawAll();
+      setBoardInteractivity(false);
+      setStatus("Waiting for opponent…");
+
+      if (roomBadge) {
+        roomBadge.style.display = "inline-block";
+        roomBadge.textContent = `Room: ${room}`;
+      }
+
+      connectWS();
+    } catch (e) {
+      setStatus(`${e.message}`);
+    }
+  });
+
+  backBtn.addEventListener("click", () => {
+    gameScreen.style.display = "none";
+    startScreen.style.display = "flex";
+
+    mode = null;
+    setStatus("Waiting to start...");
+    restartBtn.disabled = true;
+
+    mpChoices.style.display = "none";
+    onlineSetup.style.display = "none";
+    roomInput.value = "";
+    if (roomBadge) roomBadge.style.display = "none";
+
+    L.board = makeBoard();
+    O.board = makeBoard();
+    L.gameOver = O.gameOver = false;
+    L.winLine = O.winLine = null;
+    drawAll();
+
+    if (O.ws && O.ws.readyState === WebSocket.OPEN) {
+      O.ws.close();
+    }
+    O.ws = null;
+    O.room = null;
+    sessionStorage.removeItem("gomoku_session");
+
+    setBoardInteractivity(false);
+  });
+
+  restartBtn.addEventListener("click", () => {
+    if (mode === "local") {
+      localReset(L.nextFirst);
+      setBoardInteractivity(true);
+    } else if (mode === "online") {
+      if (O.ws && O.ws.readyState === WebSocket.OPEN) {
+        O.ws.send(JSON.stringify({ type: "restart" }));
+      }
+      setBoardInteractivity(false);
+      setStatus("Waiting for opponent…");
+    }
+  });
+
+  canvas.addEventListener("click", (evt) => {
+    if (mode === "local") return onLocalClick(evt);
+    if (mode === "online") return onOnlineClick(evt);
+    setStatus("Select a mode on the start screen");
+  });
 
   function onOnlineClick(evt) {
     if (!O.ws || O.ws.readyState !== WebSocket.OPEN) {
-      setStatus("Online • Join a room first");
+      setStatus("Join a room first");
       return;
     }
     if (O.gameOver) return;
@@ -370,81 +541,17 @@
 
     if (!inRange(row, col)) return;
     if (O.board[row][col] !== 0) {
-      setStatus("Online • This spot is already taken");
+      setStatus("This spot is already taken");
       return;
     }
-    if (O.youAre !== O.current) {
-      setStatus("Online • Not your turn");
+    if (canvas.style.pointerEvents === "none") {
+      setStatus("Not your turn");
       return;
     }
 
+    setBoardInteractivity(false);
     O.ws.send(JSON.stringify({ type: "move", r: row, c: col }));
   }
-
-  function nextFrame() {
-    return new Promise((r) => requestAnimationFrame(() => r()));
-  }
-
-  localBtn.addEventListener("click", async () => {
-    mode = "local";
-    onlineSetup.style.display = "none";
-    startScreen.style.display = "none";
-    gameScreen.style.display = "block";
-    await nextFrame();
-    setupHiDPI();
-    drawAll();
-    restartBtn.disabled = false;
-    setStatus("Local • Black's Turn");
-    localReset(1);
-  });
-
-  onlineBtn.addEventListener("click", () => {
-    onlineSetup.style.display = "flex";
-  });
-
-  joinBtn.addEventListener("click", async () => {
-    const room = (roomInput.value || "").trim();
-    if (!room) {
-      setStatus("Online • Please enter a room ID");
-      return;
-    }
-    try {
-      setStatus("Online • Requesting token...");
-      const data = await requestToken(room);
-      O.token = data.token;
-      O.youAre = data.color;
-
-      mode = "online";
-      startScreen.style.display = "none";
-      gameScreen.style.display = "block";
-      await nextFrame();
-      setupHiDPI();
-      drawAll();
-
-      setStatus(
-        `Online • Connecting as ${O.youAre === 1 ? "Black" : "White"}...`
-      );
-      connectWS();
-    } catch (e) {
-      setStatus(`Online • ${e.message}`);
-    }
-  });
-
-  restartBtn.addEventListener("click", () => {
-    if (mode === "local") {
-      localReset(L.nextFirst);
-    } else if (mode === "online") {
-      if (O.ws && O.ws.readyState === WebSocket.OPEN) {
-        O.ws.send(JSON.stringify({ type: "restart" }));
-      }
-    }
-  });
-
-  canvas.addEventListener("click", (evt) => {
-    if (mode === "local") return onLocalClick(evt);
-    if (mode === "online") return onOnlineClick(evt);
-    setStatus("Select a mode on the start screen");
-  });
 
   let resizeTimer = 0;
   if (typeof ResizeObserver !== "undefined") {
@@ -463,9 +570,31 @@
     });
   }
 
-  if (location.protocol === "file:") {
-    onlineBtn.disabled = true;
-    onlineBtn.title =
-      "Online mode requires running the server (npm start) and opening http://localhost:3000";
-  }
+  (function tryResume() {
+    const raw = sessionStorage.getItem("gomoku_session");
+    if (!raw) return;
+    try {
+      const saved = JSON.parse(raw);
+      if (!saved?.room || !saved?.token || !saved?.color) return;
+
+      mode = "online";
+      O.room = saved.room;
+      O.token = saved.token;
+      O.youAre = saved.color;
+
+      startScreen.style.display = "none";
+      gameScreen.style.display = "block";
+      setupHiDPI();
+      drawAll();
+      setBoardInteractivity(false);
+      setStatus("Reconnecting…");
+
+      if (roomBadge) {
+        roomBadge.style.display = "inline-block";
+        roomBadge.textContent = `Room: ${O.room}`;
+      }
+
+      connectWS();
+    } catch {}
+  })();
 })();
