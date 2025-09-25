@@ -4,7 +4,6 @@
   const GRID = 19;
   const MARGIN = 24;
   const STONE_RADIUS = 12;
-
   const startScreen = document.getElementById("startScreen");
   const gameScreen = document.getElementById("gameScreen");
   const localBtn = document.getElementById("localBtn");
@@ -15,7 +14,7 @@
   const onlineSetup = document.getElementById("onlineSetup");
   const joinBtn = document.getElementById("join");
   const roomInput = document.getElementById("room");
-
+  const aiBtn = document.getElementById("aiBtn");
   const canvas = document.getElementById("board");
   const statusEl = document.getElementById("status");
   const restartBtn = document.getElementById("restart");
@@ -24,6 +23,7 @@
   const ctx = canvas.getContext("2d");
 
   let mode = null;
+
   const L = {
     board: makeBoard(),
     current: 1,
@@ -31,6 +31,7 @@
     winLine: null,
     nextFirst: 1,
   };
+
   const O = {
     board: makeBoard(),
     current: 1,
@@ -40,11 +41,12 @@
     token: null,
     ws: null,
     room: null,
+    ai: false,
   };
 
   function apiBase() {
     if (location.protocol === "file:") return "http://localhost:3000";
-    return ""; // same-origin
+    return "";
   }
   function wsBase() {
     if (location.protocol === "file:") return "ws://localhost:3000";
@@ -57,6 +59,7 @@
     canvas.style.pointerEvents = on ? "auto" : "none";
     canvas.style.cursor = on ? "pointer" : "not-allowed";
   }
+
   let DPR = getDPR();
   function getDPR() {
     return Math.max(1, Math.floor((window.devicePixelRatio || 1) * 100) / 100);
@@ -263,7 +266,7 @@
     const row = Math.round((y / DPR - start) / step);
     if (!inRange(row, col)) return;
     if (L.board[row][col] !== 0) {
-      setStatus("Local • This spot is already taken");
+      setStatus("This spot is already taken");
       return;
     }
 
@@ -275,7 +278,7 @@
       L.winLine = res.line;
       drawAll();
       const winText = L.current === 1 ? "Black Wins!" : "White Wins!";
-      setStatus(`Local • ${winText}`);
+      setStatus(`${winText}`);
       showWinOverlay(winText);
       L.nextFirst = L.current === 2 ? 2 : 1;
       restartBtn.disabled = false;
@@ -286,24 +289,21 @@
     setStatus(`${L.current === 1 ? "Black's Turn" : "White's Turn"}`);
     drawAll();
   }
+
   async function requestToken(roomId) {
     const res = await fetch(
       `${apiBase()}/token?room=${encodeURIComponent(roomId)}`
     );
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Token request failed");
-    return data; // { room, token, color }
+    return data;
   }
-
-  async function createRoomOnServer() {
-    try {
-      const resp = await fetch(`${apiBase()}/rooms`, { method: "POST" });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "create room failed");
-      return data.room;
-    } catch {
-      return genRoomId();
-    }
+  async function createRoomOnServer(ai = false) {
+    const qs = ai ? "?ai=1" : "";
+    const resp = await fetch(`${apiBase()}/rooms${qs}`, { method: "POST" });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "create room failed");
+    return data.room;
   }
 
   function connectWS() {
@@ -370,13 +370,6 @@
   function nextFrame() {
     return new Promise((r) => requestAnimationFrame(() => r()));
   }
-  function genRoomId(len = 6) {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let s = "";
-    for (let i = 0; i < len; i++)
-      s += chars[Math.floor(Math.random() * chars.length)];
-    return s;
-  }
 
   localBtn.addEventListener("click", async () => {
     mode = "local";
@@ -399,7 +392,6 @@
     mpChoices.style.display = "flex";
     onlineSetup.style.display = "none";
   });
-
   showJoinBtn.addEventListener("click", () => {
     mpChoices.style.display = "none";
     onlineSetup.style.display = "flex";
@@ -410,14 +402,21 @@
     mpChoices.style.display = "none";
     try {
       setStatus("Creating room...");
-      const code = await createRoomOnServer();
+      const code = await createRoomOnServer(false);
       const data = await requestToken(code);
       O.token = data.token;
       O.youAre = data.color;
       O.room = code;
+      O.ai = false;
+
       sessionStorage.setItem(
         "gomoku_session",
-        JSON.stringify({ room: O.room, token: O.token, color: O.youAre })
+        JSON.stringify({
+          room: O.room,
+          token: O.token,
+          color: O.youAre,
+          ai: O.ai,
+        })
       );
 
       mode = "online";
@@ -452,9 +451,16 @@
       O.token = data.token;
       O.youAre = data.color;
       O.room = room;
+      O.ai = false;
+
       sessionStorage.setItem(
         "gomoku_session",
-        JSON.stringify({ room: O.room, token: O.token, color: O.youAre })
+        JSON.stringify({
+          room: O.room,
+          token: O.token,
+          color: O.youAre,
+          ai: O.ai,
+        })
       );
 
       mode = "online";
@@ -469,6 +475,46 @@
       if (roomBadge) {
         roomBadge.style.display = "inline-block";
         roomBadge.textContent = `Room: ${room}`;
+      }
+
+      connectWS();
+    } catch (e) {
+      setStatus(`${e.message}`);
+    }
+  });
+
+  aiBtn.addEventListener("click", async () => {
+    try {
+      setStatus("Creating AI room…");
+      const code = await createRoomOnServer(true);
+      const tk = await requestToken(code);
+      O.token = tk.token;
+      O.youAre = tk.color;
+      O.room = code;
+      O.ai = true;
+
+      sessionStorage.setItem(
+        "gomoku_session",
+        JSON.stringify({
+          room: O.room,
+          token: O.token,
+          color: O.youAre,
+          ai: O.ai,
+        })
+      );
+
+      mode = "online";
+      startScreen.style.display = "none";
+      gameScreen.style.display = "block";
+      await nextFrame();
+      setupHiDPI();
+      drawAll();
+      setBoardInteractivity(false);
+      setStatus("Waiting for opponent…");
+
+      if (roomBadge) {
+        roomBadge.style.display = "inline-block";
+        roomBadge.textContent = "AI";
       }
 
       connectWS();
@@ -501,6 +547,7 @@
     }
     O.ws = null;
     O.room = null;
+    O.ai = false;
     sessionStorage.removeItem("gomoku_session");
 
     setBoardInteractivity(false);
@@ -552,7 +599,6 @@
     setBoardInteractivity(false);
     O.ws.send(JSON.stringify({ type: "move", r: row, c: col }));
   }
-
   let resizeTimer = 0;
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => {
@@ -570,7 +616,7 @@
     });
   }
 
-  (function tryResume() {
+  (function restoreSession() {
     const raw = sessionStorage.getItem("gomoku_session");
     if (!raw) return;
     try {
@@ -581,6 +627,7 @@
       O.room = saved.room;
       O.token = saved.token;
       O.youAre = saved.color;
+      O.ai = !!saved.ai;
 
       startScreen.style.display = "none";
       gameScreen.style.display = "block";
@@ -591,7 +638,7 @@
 
       if (roomBadge) {
         roomBadge.style.display = "inline-block";
-        roomBadge.textContent = `Room: ${O.room}`;
+        roomBadge.textContent = O.ai ? "Game with AI" : `Room: ${O.room}`;
       }
 
       connectWS();
